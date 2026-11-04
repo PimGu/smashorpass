@@ -83,6 +83,7 @@ def connect():
     db.execute("PRAGMA foreign_keys = ON")
     return db
 
+
 def demo_profiles():
     rng = random.Random(20270214)
     names = {
@@ -102,6 +103,20 @@ def demo_profiles():
             yield (group * 100 + index + 1, first_names[index % len(first_names)],
                    rng.randint(21, 57), gender, preference, club,
                    int(first_at_club or rng.random() < .4))
+
+    for group, (gender, first_names) in enumerate(names.items()):
+        opposite = "man" if gender == "vrouw" else "vrouw"
+        locations = list(CLUBS) * (400 // len(CLUBS))
+        locations += rng.sample(CLUBS, 400 % len(CLUBS))
+        rng.shuffle(locations)
+        seen = set()
+        for index, club in enumerate(locations):
+            first_at_club = club not in seen
+            seen.add(club)
+            yield (201 + group * 400 + index, rng.choice(first_names),
+                   rng.randint(21, 57), gender,
+                   "iedereen" if first_at_club else rng.choice((opposite, opposite, gender, "iedereen")),
+                   club, int(rng.random() < .4))
 
 
 def matching_profiles(db, player):
