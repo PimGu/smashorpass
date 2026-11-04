@@ -43,13 +43,6 @@ label.check{display:flex;align-items:start}input[type=checkbox]{width:auto;margi
 <p id="status" class="status" role="status"></p>
 </main>
 <script>
-const demoProfiles = [
-  { name: 'Sophie', age: 29, gender: 'vrouw', photo: true, mutual: true },
-  { name: 'Noor', age: 31, gender: 'vrouw', mutual: false },
-  { name: 'Lina', age: 28, gender: 'vrouw', mutual: true },
-  { name: 'Sam', age: 30, gender: 'man', mutual: true },
-  { name: 'Milan', age: 32, gender: 'man', mutual: true }
-];
 let club;
 let profiles;
 let token;
@@ -73,7 +66,7 @@ function deck(focus = true) {
   }
   show(`<h1 tabindex="-1">Smash <em>or Pass</em></h1>
     <article class="card" aria-label="Profiel van ${profile.name}">
-      <div class="photo ${profile.photo ? '' : 'alt'}" aria-hidden="true">${profile.photo ? '' : profile.name[0]}</div>
+      <div class="photo ${(profile.id === 1) ? '' : 'alt'}" aria-hidden="true">${(profile.id === 1) ? '' : profile.name[0]}</div>
       <footer><h2>${profile.name}, ${profile.age}</h2><p>${club}</p></footer>
     </article>
     <div class="actions"><button class="secondary" id="pass">× Pass</button><button id="smash">♥ Smash</button></div>
@@ -161,7 +154,7 @@ async function booking() {
     for (const choice of choices) choice.disabled = true;
     document.querySelector('#back').disabled = true;
     try {
-      await api('/api/claim', { time, match: bookedMatch.name });
+      await api('/api/claim', { time, match: bookedMatch.id });
     } catch (error) {
       status.textContent = error.message;
       for (const choice of choices) choice.disabled = false;
@@ -231,8 +224,7 @@ async function registration() {
     try {
       ({token} = await api('/api/register', data));
       club = data.club;
-      profiles = demoProfiles.filter(profile =>
-        data.preference === 'iedereen' || profile.gender === data.preference);
+      ({profiles} = await api('/api/profiles'));
       deck();
     } catch (error) {
       status.textContent = error.message;
