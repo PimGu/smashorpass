@@ -1,5 +1,6 @@
 import json
 import re
+import random
 import secrets
 import sqlite3
 from contextlib import closing
@@ -8,7 +9,47 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "single-court.sqlite3"
-CLUBS = ("Amsterdam Zuidoost", "Amersfoort", "Nijmegen Westerpark")
+CLUBS = (
+    "Almere",
+    "Amersfoort",
+    "Amsterdam Kauwgomballenkwartier",
+    "Amsterdam Sloterdijk",
+    "Amsterdam Zuidoost",
+    "Apeldoorn De Maten",
+    "Apeldoorn Malkenschoten",
+    "Arnhem",
+    "Assen Fokkerstraat",
+    "Breda",
+    "Den Bosch",
+    "Den Haag Benoordenhout",
+    "Deventer",
+    "Eindhoven Beursgebouw",
+    "Eindhoven High Tech Campus",
+    "Eindhoven Vijfkamplaan",
+    "Emmen",
+    "Enschede",
+    "Goes",
+    "Groningen Atoomweg",
+    "Groningen Euroborg",
+    "Groningen Suikerterrein",
+    "Haarlem Haarlemmerstroom",
+    "Heemskerk Kerkweg",
+    "Heerlen Noord",
+    "Helmond",
+    "Leeuwarden",
+    "Maastricht",
+    "Nijmegen Westerpark",
+    "Oisterwijk Sportlaan",
+    "Papendrecht Oostpolder",
+    "Roosendaal",
+    "Rotterdam",
+    "Sittard Riekswaeg Zuid",
+    "Tilburg",
+    "Utrecht Vechtsebanen",
+    "Utrecht Zeehaenkade",
+    "Zutphen Noorderhaven",
+    "Zwolle Spoorzone",
+)
 SLOTS = tuple(f"{hour:02}:00" for hour in range(10, 20))
 
 SCHEMA = """
@@ -22,6 +63,11 @@ CREATE TABLE IF NOT EXISTS registrations (
     name TEXT NOT NULL, age INTEGER NOT NULL CHECK(age >= 18),
     gender TEXT NOT NULL, preference TEXT NOT NULL,
     club TEXT NOT NULL REFERENCES clubs(name)
+);
+CREATE TABLE IF NOT EXISTS demo_profiles (
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER NOT NULL,
+    gender TEXT NOT NULL, preference TEXT NOT NULL,
+    club TEXT NOT NULL REFERENCES clubs(name), mutual INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS claims (
     registration_id INTEGER PRIMARY KEY REFERENCES registrations(id),
@@ -37,6 +83,37 @@ def connect():
     db.execute("PRAGMA foreign_keys = ON")
     return db
 
+def demo_profiles():
+    rng = random.Random(20270214)
+    names = {
+        "vrouw": "Sophie Noor Lina Sara Emma Julia Mila Tess Eva Zoë Nina Isa Anna Lynn Lotte Yara Fleur Lieke Evi Roos".split(),
+        "man": "Sam Milan Daan Sem Noah Finn Luuk Liam Levi Mees Lars Bram Max Jesse Noud Lucas Adam Ruben Kai Julian".split(),
+    }
+    for group, (gender, first_names) in enumerate(names.items()):
+        opposite = "man" if gender == "vrouw" else "vrouw"
+        locations = list(CLUBS) * 2 + rng.sample(CLUBS, 100 - 2 * len(CLUBS))
+        rng.shuffle(locations)
+        seen = set()
+        for index, club in enumerate(locations):
+            first_at_club = club not in seen
+            seen.add(club)
+            preference = "iedereen" if first_at_club else rng.choice(
+                (opposite, opposite, gender, "iedereen"))
+            yield (group * 100 + index + 1, first_names[index % len(first_names)],
+                   rng.randint(21, 57), gender, preference, club,
+                   int(first_at_club or rng.random() < .4))
+
+
+def matching_profiles(db, player):
+    return db.execute("""
+        SELECT id, name, age, gender, club, mutual FROM demo_profiles
+        WHERE club = ?
+          AND (? = 'iedereen' OR gender = ?)
+          AND (preference = 'iedereen' OR preference = ?)
+        ORDER BY mutual DESC, abs(age - ?), id
+    """, (player["club"], player["preference"], player["preference"],
+          player["gender"], player["age"]))
+
 
 def setup():
     with closing(connect()) as db, db:
@@ -44,6 +121,7 @@ def setup():
         db.executemany("INSERT OR IGNORE INTO clubs VALUES (?)", [(club,) for club in CLUBS])
         db.executemany("INSERT OR IGNORE INTO slots VALUES (?, ?)",
                        [(club, time) for club in CLUBS for time in SLOTS])
+        db.executemany("INSERT OR IGNORE INTO demo_profiles VALUES (?, ?, ?, ?, ?, ?, ?)", demo_profiles())
 
 
 def register(db, data):
@@ -68,11 +146,12 @@ def register(db, data):
 
 def claim(db, player, data):
     time = data.get("time")
-    match = data.get("match")
-    allowed = {"vrouw": ("Sophie", "Lina"), "man": ("Sam", "Milan"),
-               "iedereen": ("Sophie", "Lina", "Sam", "Milan")}
-    if time not in SLOTS or match not in allowed[player["preference"]]:
+    match_id = data.get("match")
+    match = next((row for row in matching_profiles(db, player)
+                  if row["id"] == match_id and row["mutual"]), None)
+    if time not in SLOTS or type(match_id) is not int or match is None:
         raise ValueError("Kies een geldig voorbeeldtijdslot en een demomatch.")
+    match = f"{match['name']} (#{match_id})"
     db.execute("BEGIN IMMEDIATE")
     existing = db.execute("SELECT time,match_name FROM claims WHERE registration_id = ?",
                           (player["id"],)).fetchone()
@@ -103,11 +182,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, (ROOT / "index.html").read_bytes(), "text/html; charset=utf-8")
         if self.path == "/api/clubs":
             return self.reply(200, {"clubs": CLUBS})
-        if self.path == "/api/slots":
+        if self.path in ("/api/slots", "/api/profiles"):
             with closing(connect()) as db:
                 player = self.player(db)
                 if not player:
                     return self.reply(401, {"error": "Meld je eerst aan."})
+                if self.path == "/api/profiles":
+                    return self.reply(200, {"profiles": [dict(row) for row in matching_profiles(db, player)]})
                 rows = db.execute("""SELECT time FROM slots
                     WHERE club = ? AND NOT EXISTS (
                         SELECT 1 FROM claims WHERE claims.club = slots.club AND claims.time = slots.time
